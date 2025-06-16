@@ -2312,68 +2312,6 @@ public class SerialHelper {
 	//
 	
 	/**
-	 * 속성 기반 유사 EPMDocument 검색 (개선된 버전)
-	 * - DISTINCT 적용으로 중복 제거
-	 * - 속성 타입별 정확한 처리
-	 * - 안전한 예외 처리
-	 */
-	public List<Map<String, Object>> getSimilarEPMDocumentByAttributes(Map<String, Object> params) throws Exception {
-	    List<Map<String, Object>> resultList = new ArrayList<>();
-
-	    try {
-	        // 1. 입력 파라미터 검증
-	        String clazz = Objects.toString(params.get("Class"), "").trim();
-	        if (clazz.isEmpty()) {
-	            throw new Exception("Class parameter is required");
-	        }
-
-	        // 2. ClassItem 존재 여부 확인
-	        List<ClassItem> classItems = getFindAllClassItems(clazz);
-	        if (classItems == null || classItems.isEmpty()) {
-	            System.out.println("No ClassItems found for class: " + clazz);
-	            return resultList;
-	        }
-
-	        // 3. 동적 속성 파라미터 추출
-	        Map<String, Object> attributeParams = extractValidAttributeParams(params);
-	        if (attributeParams.isEmpty()) {
-	            System.out.println("No valid attribute parameters found");
-	            return resultList;
-	        }
-
-	        // 4. 각 속성의 타입(GR/X) 조회
-	        Map<String, String> attributeTypes = getAttributeTypesForSearch(clazz, attributeParams.keySet());
-	        if (attributeTypes.isEmpty()) {
-	            System.out.println("No attribute types found for given attributes");
-	            return resultList;
-	        }
-
-	        // 5. 유효한 속성만 필터링
-	        Map<String, Object> validAttributes = filterValidAttributesForSearch(attributeParams, attributeTypes);
-	        if (validAttributes.isEmpty()) {
-	            System.out.println("No valid attributes found after filtering");
-	            return resultList;
-	        }
-
-	        // 6. 쿼리 생성 및 실행
-	        QuerySpec query = buildSearchQuery(clazz, validAttributes, attributeTypes);
-	        System.out.println("Search Query: " + query.toString());
-
-	        // 7. 결과 처리
-	        resultList = executeSearchQuery(query, validAttributes, attributeTypes);
-	        
-	        System.out.println("Found " + resultList.size() + " EPMDocuments");
-
-	    } catch (Exception e) {
-	        System.err.println("Error in getSimilarEPMDocumentByAttributes: " + e.getMessage());
-	        e.printStackTrace();
-	        throw new Exception("Failed to search EPMDocuments: " + e.getMessage());
-	    }
-
-	    return resultList;
-	}
-
-	/**
 	 * 유효한 속성 파라미터 추출
 	 */
 	private Map<String, Object> extractValidAttributeParams(Map<String, Object> params) {
@@ -2392,523 +2330,391 @@ public class SerialHelper {
 	    
 	    return attributeParams;
 	}
-
+	
 	/**
-	 * 검색용 속성 타입 조회 (개선된 버전)
+	 * 속성 기반 유사 EPMDocument 검색 (안전한 버전)
+	 * - 단순한 쿼리만 사용하여 안정성 보장
+	 * - 복잡한 조인 없이 단계별 검색
 	 */
-	private Map<String, String> getAttributeTypesForSearch(String clazz, Set<String> attributeNames) throws Exception {
-	    Map<String, String> attributeTypes = new HashMap<>();
-	    
-	    if (attributeNames.isEmpty()) {
-	        return attributeTypes;
-	    }
-	    
-	    try {
-	        QuerySpec query = new QuerySpec();
-	        int idxClassItem = query.appendClassList(ClassItem.class, false);
-	        int idxObjectClassificationMapping = query.appendClassList(ObjectClassificationMapping.class, true);
-	        
-	        query.setAdvancedQueryEnabled(true);
-	        
-	        // 클래스 조건
-	        query.appendWhere(new SearchCondition(ClassItem.class, ClassItem.H2__CLASS, 
-	            SearchCondition.EQUAL, clazz), new int[]{idxClassItem});
-	        query.appendAnd();
-	        
-	        // ClassItem과 ObjectClassificationMapping 조인
-	        query.appendWhere(new SearchCondition(ClassItem.class, ClassItem.H2__ATNAM, 
-	            ObjectClassificationMapping.class, ObjectClassificationMapping.H2__ATNAM), 
-	            new int[]{idxClassItem, idxObjectClassificationMapping});
-	        query.appendAnd();
-	        
-	        // 특정 속성명들만 조회 (H2_PLM_PROP 기준으로 검색)
-	        String[] attrNameArray = attributeNames.toArray(new String[0]);
-	        query.appendWhere(new SearchCondition(ObjectClassificationMapping.class, 
-	            ObjectClassificationMapping.H2__PLM__PROP, attrNameArray, true, false), 
-	            new int[]{idxObjectClassificationMapping});
-	        query.appendAnd();
-	        
-	        // GR 또는 X 타입만
-	        query.appendWhere(new SearchCondition(ObjectClassificationMapping.class, 
-	            ObjectClassificationMapping.H2__PROP__TYPE, new String[]{"GR", "X"}, true, false), 
-	            new int[]{idxObjectClassificationMapping});
-	        
-	        QueryResult qr = PersistenceHelper.manager.find(query);
-	        
-	        while (qr.hasMoreElements()) {
-	            Object[] row = (Object[]) qr.nextElement();
-	            ObjectClassificationMapping mapping = (ObjectClassificationMapping) row[0];
-	            
-	            String plmProp = mapping.getH2_PLM_PROP(); // 실제 속성명
-	            String propType = mapping.getH2_PROP_TYPE(); // GR 또는 X
-	            
-	            if (plmProp != null && propType != null) {
-	                attributeTypes.put(plmProp.trim(), propType.trim());
-	            }
-	        }
-	        
-	    } catch (Exception e) {
-	        System.err.println("Error getting attribute types: " + e.getMessage());
-	        throw new Exception("Failed to get attribute types: " + e.getMessage());
-	    }
-	    
-	    return attributeTypes;
-	}
-
-	/**
-	 * 검색용 유효한 속성 필터링
-	 */
-	private Map<String, Object> filterValidAttributesForSearch(Map<String, Object> attributeParams, 
-	                                                         Map<String, String> attributeTypes) {
-	    Map<String, Object> validAttributes = new HashMap<>();
-	    
-	    for (Map.Entry<String, Object> entry : attributeParams.entrySet()) {
-	        String attrName = entry.getKey();
-	        String attrType = attributeTypes.get(attrName);
-	        
-	        if (attrType != null && ("GR".equals(attrType) || "X".equals(attrType))) {
-	            validAttributes.put(attrName, entry.getValue());
-	        } else {
-	            System.out.println("Warning: Attribute '" + attrName + "' not found or invalid type. Skipping.");
-	        }
-	    }
-	    
-	    return validAttributes;
-	}
-
-	/**
-	 * 검색 쿼리 생성 (DISTINCT 적용)
-	 */
-	private QuerySpec buildSearchQuery(String clazz, Map<String, Object> validAttributes, 
-	                                 Map<String, String> attributeTypes) throws Exception {
-	    
-	    QuerySpec query = new QuerySpec();
-	    
-	    // 기본 클래스들 추가
-	    int idxPart = query.appendClassList(WTPart.class, true);
-	    int idxPartMaster = query.appendClassList(WTPartMaster.class, false);
-	    int idxBuildRule = query.appendClassList(EPMBuildRule.class, false);
-	    int idxDoc = query.appendClassList(EPMDocument.class, true);
-	    int idxDocMaster = query.appendClassList(EPMDocumentMaster.class, false);
-	    int idxUser = query.appendClassList(WTUser.class, false);
-	    
-	    // ⭐ 중복 제거를 위한 DISTINCT 설정
-	    query.setDistinct(true);
-	    query.setAdvancedQueryEnabled(true);
-	    
-	    // 기본 조인 조건들
-	    addBasicJoinConditionsForSearch(query, idxPart, idxPartMaster, idxBuildRule, 
-	                                  idxDoc, idxDocMaster, idxUser, clazz);
-	    
-	    // 속성별 조건 추가 (EXISTS 서브쿼리 방식)
-	    addAttributeConditionsAsExists(query, validAttributes, attributeTypes, clazz, idxDoc, idxPartMaster, idxDocMaster);
-	    
-	    return query;
-	}
-
-	/**
-	 * 기본 조인 조건 추가 (검색용)
-	 */
-	private void addBasicJoinConditionsForSearch(QuerySpec query, int idxPart, int idxPartMaster, 
-	                                           int idxBuildRule, int idxDoc, int idxDocMaster, 
-	                                           int idxUser, String clazz) throws Exception {
-	    
-	    // Part와 PartMaster 조인
-	    query.appendWhere(new SearchCondition(WTPart.class, "masterReference.key.id", 
-	        WTPartMaster.class, "thePersistInfo.theObjectIdentifier.id"), idxPart, idxPartMaster);
-	    query.appendAnd();
-	    
-	    // Part와 EPMBuildRule 조인
-	    query.appendWhere(new SearchCondition(WTPart.class, "iterationInfo.branchId", 
-	        EPMBuildRule.class, "roleBObjectRef.key.branchId"), idxPart, idxBuildRule);
-	    query.appendAnd();
-	    
-	    // EPMBuildRule과 EPMDocument 조인
-	    query.appendWhere(new SearchCondition(EPMBuildRule.class, "roleAObjectRef.key.branchId", 
-	        EPMDocument.class, "iterationInfo.branchId"), idxBuildRule, idxDoc);
-	    query.appendAnd();
-	    
-	    // EPMDocument와 EPMDocumentMaster 조인
-	    query.appendWhere(new SearchCondition(EPMDocument.class, "masterReference.key.id", 
-	        EPMDocumentMaster.class, "thePersistInfo.theObjectIdentifier.id"), idxDoc, idxDocMaster);
-	    query.appendAnd();
-	    
-	    // EPMDocument와 WTUser 조인
-	    query.appendWhere(new SearchCondition(EPMDocument.class, "iterationInfo.creator.key.id", 
-	        WTUser.class, "thePersistInfo.theObjectIdentifier.id"), idxDoc, idxUser);
-	    query.appendAnd();
-	    
-	    // 체크아웃 상태 조건
-	    query.appendWhere(new SearchCondition(EPMDocument.class, "checkoutInfo.state", 
-	        new String[]{"c/i", "c/o"}, true, false), new int[]{idxDoc});
-	    query.appendAnd();
-	    query.appendWhere(new SearchCondition(WTPart.class, "checkoutInfo.state", 
-	        new String[]{"c/i", "c/o"}, true, false), new int[]{idxPart});
-	}
-
-	/**
-	 * 속성 조건을 직접 조인 방식으로 추가 (DISTINCT로 중복 제거)
-	 */
-	private void addAttributeConditionsAsExists(QuerySpec mainQuery, Map<String, Object> validAttributes, 
-	                                          Map<String, String> attributeTypes, String clazz,
-	                                          int idxDoc, int idxPartMaster, int idxDocMaster) throws Exception {
-	    
-	    // GR 속성과 X 속성을 분리하여 처리
-	    List<Map.Entry<String, Object>> grAttributes = new ArrayList<>();
-	    List<Map.Entry<String, Object>> xAttributes = new ArrayList<>();
-	    
-	    for (Map.Entry<String, Object> attr : validAttributes.entrySet()) {
-	        String attrType = attributeTypes.get(attr.getKey());
-	        if ("GR".equals(attrType)) {
-	            grAttributes.add(attr);
-	        } else if ("X".equals(attrType)) {
-	            xAttributes.add(attr);
-	        }
-	    }
-	    
-	    // GR 속성 조건 추가
-	    if (!grAttributes.isEmpty()) {
-	        addGRAttributesConditions(mainQuery, grAttributes, idxDoc);
-	    }
-	    
-	    // X 속성 조건 추가
-	    if (!xAttributes.isEmpty()) {
-	        addXAttributesConditions(mainQuery, xAttributes, clazz, idxPartMaster, idxDocMaster);
-	    }
-	}
-
-	/**
-	 * GR 속성들의 조건 추가 (개선된 방식)
-	 */
-	private void addGRAttributesConditions(QuerySpec query, List<Map.Entry<String, Object>> grAttributes,
-	                                     int idxDoc) throws Exception {
-	    
-	    for (Map.Entry<String, Object> attr : grAttributes) {
-	        query.appendAnd();
-	        
-	        String attrName = attr.getKey();
-	        Object attrValue = attr.getValue();
-	        
-	        // 각 GR 속성마다 별도의 테이블 인덱스 사용
-	        int idxIBAValue = query.appendClassList(IBAValues.class, false);
-	        int idxStringValue = query.appendClassList(StringValue.class, false);
-	        
-	        query.appendOpenParen();
-	        
-	        // IBAValue와 EPMDocument 조인
-	        query.appendWhere(new SearchCondition(IBAValues.class, "theIBAHolder.key.id", 
-	            EPMDocument.class, "thePersistInfo.theObjectIdentifier.id"), 
-	            new int[]{idxIBAValue, idxDoc});
-	        query.appendAnd();
-	        
-	        // 속성명 조건
-	        query.appendWhere(new SearchCondition(IBAValues.class, "theDefinition.name", 
-	            SearchCondition.EQUAL, attrName), new int[]{idxIBAValue});
-	        query.appendAnd();
-	        
-	        // 값 조건 - 타입에 따라 처리
-	        addGRValueCondition(query, attrValue, idxIBAValue, idxStringValue);
-	        
-	        query.appendCloseParen();
-	    }
-	}
-
-	/**
-	 * GR 속성 값 조건 추가 (타입별 처리)
-	 */
-	private void addGRValueCondition(QuerySpec query, Object attrValue, int idxIBAValue, int idxStringValue) throws Exception {
-	    if (attrValue instanceof String) {
-	        query.appendWhere(new SearchCondition(StringValue.class, "theIBAValue.key.id", 
-	            IBAValues.class, "thePersistInfo.theObjectIdentifier.id"), 
-	            new int[]{idxStringValue, idxIBAValue});
-	        query.appendAnd();
-	        query.appendWhere(new SearchCondition(StringValue.class, "value", 
-	            SearchCondition.EQUAL, attrValue.toString()), new int[]{idxStringValue});
-	    } else if (attrValue instanceof Number) {
-	        int idxFloatValue = query.appendClassList(FloatValue.class, false);
-	        query.appendWhere(new SearchCondition(FloatValue.class, "theIBAValue.key.id", 
-	            IBAValues.class, "thePersistInfo.theObjectIdentifier.id"), 
-	            new int[]{idxFloatValue, idxIBAValue});
-	        query.appendAnd();
-	        query.appendWhere(new SearchCondition(FloatValue.class, "value", 
-	            SearchCondition.EQUAL, (String) attrValue), new int[]{idxFloatValue});
-	    } else if (attrValue instanceof Boolean) {
-	        int idxBooleanValue = query.appendClassList(BooleanValue.class, false);
-	        query.appendWhere(new SearchCondition(BooleanValue.class, "theIBAValue.key.id", 
-	            IBAValues.class, "thePersistInfo.theObjectIdentifier.id"), 
-	            new int[]{idxBooleanValue, idxIBAValue});
-	        query.appendAnd();
-	        query.appendWhere(new SearchCondition(BooleanValue.class, "value", 
-	            SearchCondition.EQUAL, (String) attrValue), new int[]{idxBooleanValue});
-	    } else {
-	        // 기본적으로 String으로 처리
-	        query.appendWhere(new SearchCondition(StringValue.class, "theIBAValue.key.id", 
-	            IBAValues.class, "thePersistInfo.theObjectIdentifier.id"), 
-	            new int[]{idxStringValue, idxIBAValue});
-	        query.appendAnd();
-	        query.appendWhere(new SearchCondition(StringValue.class, "value", 
-	            SearchCondition.EQUAL, attrValue.toString()), new int[]{idxStringValue});
-	    }
-	}
-
-	/**
-	 * X 속성들의 조건 추가 (개선된 방식)
-	 */
-	private void addXAttributesConditions(QuerySpec query, List<Map.Entry<String, Object>> xAttributes,
-	                                    String clazz, int idxPartMaster, int idxDocMaster) throws Exception {
-	    
-	    for (Map.Entry<String, Object> attr : xAttributes) {
-	        query.appendAnd();
-	        
-	        String attrName = attr.getKey();
-	        Object attrValue = attr.getValue();
-	        
-	        // 각 X 속성마다 별도의 테이블 인덱스 사용
-	        int idxStringValue3 = query.appendClassList(Stringvalue3.class, false);
-	        int idxObjectClassificationMapping = query.appendClassList(ObjectClassificationMapping.class, false);
-	        int idxClassItem = query.appendClassList(ClassItem.class, false);
-	        
-	        query.appendOpenParen();
-	        
-	        // ClassItem 조건
-	        query.appendWhere(new SearchCondition(ClassItem.class, ClassItem.H2__CLASS, 
-	            SearchCondition.EQUAL, clazz), new int[]{idxClassItem});
-	        query.appendAnd();
-	        
-	        // ClassItem과 ObjectClassificationMapping 조인
-	        query.appendWhere(new SearchCondition(ClassItem.class, ClassItem.H2__ATNAM, 
-	            ObjectClassificationMapping.class, ObjectClassificationMapping.H2__ATNAM), 
-	            new int[]{idxClassItem, idxObjectClassificationMapping});
-	        query.appendAnd();
-	        
-	        // 속성명 조건
-	        query.appendWhere(new SearchCondition(ObjectClassificationMapping.class, 
-	            ObjectClassificationMapping.H2__PLM__PROP, SearchCondition.EQUAL, attrName), 
-	            new int[]{idxObjectClassificationMapping});
-	        query.appendAnd();
-	        
-	        // X 타입 조건
-	        query.appendWhere(new SearchCondition(ObjectClassificationMapping.class, 
-	            ObjectClassificationMapping.H2__PROP__TYPE, SearchCondition.EQUAL, "X"), 
-	            new int[]{idxObjectClassificationMapping});
-	        query.appendAnd();
-	        
-	        // Stringvalue3과 ObjectClassificationMapping 조인
-	        query.appendWhere(new SearchCondition(Stringvalue3.class, Stringvalue3.NH__CLASSIFICATION__OID, 
-	            ObjectClassificationMapping.class, "thePersistInfo.theObjectIdentifier.id"), 
-	            new int[]{idxStringValue3, idxObjectClassificationMapping});
-	        query.appendAnd();
-	        
-	        // Stringvalue3과 Master 조인 (EPMDocumentMaster 우선)
-	        query.appendOpenParen();
-	        query.appendWhere(new SearchCondition(Stringvalue3.class, Stringvalue3.NH__WTPARTMASTER__OID, 
-	            EPMDocumentMaster.class, "thePersistInfo.theObjectIdentifier.id"), 
-	            new int[]{idxStringValue3, idxDocMaster});
-	        query.appendOr();
-	        query.appendWhere(new SearchCondition(Stringvalue3.class, Stringvalue3.NH__WTPARTMASTER__OID, 
-	            WTPartMaster.class, "thePersistInfo.theObjectIdentifier.id"), 
-	            new int[]{idxStringValue3, idxPartMaster});
-	        query.appendCloseParen();
-	        query.appendAnd();
-	        
-	        // 속성 값 조건
-	        query.appendWhere(new SearchCondition(Stringvalue3.class, Stringvalue3.NH__VALUE, 
-	            SearchCondition.EQUAL, attrValue.toString()), new int[]{idxStringValue3});
-	        
-	        query.appendCloseParen();
-	    }
-	}
-
-	/**
-	 * 검색 쿼리 실행 및 결과 처리
-	 */
-	private List<Map<String, Object>> executeSearchQuery(QuerySpec query, Map<String, Object> validAttributes,
-	                                                    Map<String, String> attributeTypes) throws Exception {
+	public List<Map<String, Object>> getSimilarEPMDocumentByAttributes(Map<String, Object> params) throws Exception {
 	    List<Map<String, Object>> resultList = new ArrayList<>();
-	    Set<String> processedDocumentOIDs = new HashSet<>(); // 이중 중복 방지
+
+	    try {
+	        // 1. 입력 파라미터 검증
+	        String clazz = Objects.toString(params.get("Class"), "").trim();
+	        if (clazz.isEmpty()) {
+	            throw new Exception("Class parameter is required");
+	        }
+
+	        // 2. 동적 속성 파라미터 추출
+	        Map<String, Object> attributeParams = extractValidAttributeParams(params);
+	        if (attributeParams.isEmpty()) {
+	            System.out.println("No valid attribute parameters found");
+	            return resultList;
+	        }
+
+	        // 3. 안전한 단계별 검색 실행
+	        resultList = executeSafeSearch(clazz, attributeParams);
+	        
+	        System.out.println("Found " + resultList.size() + " EPMDocuments");
+
+	    } catch (Exception e) {
+	        System.err.println("Error in getSimilarEPMDocumentByAttributes: " + e.getMessage());
+	        e.printStackTrace();
+	        throw new Exception("Failed to search EPMDocuments: " + e.getMessage());
+	    }
+
+	    return resultList;
+	}
+
+	/**
+	 * 안전한 검색 실행 - 각 단계를 독립적으로 처리
+	 */
+	private List<Map<String, Object>> executeSafeSearch(String clazz, Map<String, Object> attributeParams) throws Exception {
+	    List<Map<String, Object>> resultList = new ArrayList<>();
 	    
 	    try {
-	        QueryResult qr = PersistenceHelper.manager.find(query);
+	        // Step 1: WTPart 목록 먼저 조회 (클래스 필터링 포함)
+	        List<WTPart> candidateParts = getCandidatePartsByClass(clazz);
 	        
-	        while (qr.hasMoreElements()) {
-	            Object[] row = (Object[]) qr.nextElement();
-	            
-	            // 기본 인덱스들 (DISTINCT가 적용되어도 순서는 유지됨)
-	            WTPart part = (WTPart) row[0];           // idxPart
-	            EPMDocument doc = (EPMDocument) row[1];   // idxDoc  
-	            EPMDocumentMaster docMaster = (EPMDocumentMaster) doc.getMaster();
-//	            EPMDocumentMaster docMaster = (EPMDocumentMaster) row[4]; // idxDocMaster
-//	            WTUser user = (WTUser) row[5];           // idxUser
-	            
-	            String documentOID = doc.getPersistInfo().getObjectIdentifier().getStringValue();
-	            
-	            // 이중 중복 방지 체크
-	            if (processedDocumentOIDs.contains(documentOID)) {
+	        if (candidateParts.isEmpty()) {
+	            System.out.println("No candidate Parts found for class: " + clazz);
+	            return resultList;
+	        }
+	        
+	        System.out.println("Found " + candidateParts.size() + " candidate parts");
+	        
+	        // Step 2: 각 Part에 대해 연관된 EPMDocument 조회 및 속성 매칭
+	        for (WTPart part : candidateParts) {
+	            try {
+	                EPMDocument epmDoc = getEPMDocumentByWTPart(part);
+	                if (epmDoc != null) {
+	                    // 속성 매칭 확인
+	                    if (isPartMatchingAttributes(part, epmDoc, clazz, attributeParams)) {
+	                        Map<String, Object> resultMap = createDetailedResultMap(part, epmDoc, clazz, attributeParams);
+	                        resultList.add(resultMap);
+	                    }
+	                }
+	            } catch (Exception e) {
+	                System.err.println("Error processing part " + part.getNumber() + ": " + e.getMessage());
+	                // 개별 Part 처리 실패는 무시하고 계속 진행
 	                continue;
 	            }
-	            processedDocumentOIDs.add(documentOID);
-	            
-	            Map<String, Object> resultMap = createSearchResultMap(part, doc, docMaster);
-	            
-	            // 추가 속성 정보 조회
-	            Map<String, Object> attributes = getDocumentAttributesForSearch(doc, part, 
-	                                                                           validAttributes.keySet(), attributeTypes);
-	            resultMap.put("attributes", attributes);
-	            
-	            resultList.add(resultMap);
 	        }
 	        
 	    } catch (Exception e) {
-	        System.err.println("Error executing search query: " + e.getMessage());
-	        throw new Exception("Failed to execute search query: " + e.getMessage());
+	        System.err.println("Error in safe search execution: " + e.getMessage());
+	        throw e;
 	    }
 	    
 	    return resultList;
 	}
 
 	/**
-	 * 검색 결과 Map 생성
+	 * 클래스별 후보 Part 목록 조회 (단순한 쿼리만 사용)
 	 */
-	private Map<String, Object> createSearchResultMap(WTPart part, EPMDocument doc, 
-	                                                 EPMDocumentMaster docMaster) {
-	    Map<String, Object> resultMap = new HashMap<>();
+	private List<WTPart> getCandidatePartsByClass(String clazz) throws Exception {
+	    List<WTPart> partList = new ArrayList<>();
 	    
 	    try {
-	        resultMap.put("partNumber", part.getNumber());
-	        resultMap.put("partName", part.getName());
-	        resultMap.put("documentNumber", doc.getNumber());
-	        resultMap.put("documentName", doc.getName());
-	        resultMap.put("documentType", doc.getDocType().toString());
-	        //resultMap.put("createdBy", user.getName());
-	        resultMap.put("createdTime", doc.getCreateTimestamp());
-	        resultMap.put("modifiedTime", doc.getModifyTimestamp());
-	        
-	        String version = doc.getVersionIdentifier().getSeries().getValue() + "." + 
-	                        doc.getIterationIdentifier().getSeries().getValue();
-	        resultMap.put("version", version);
-	        
-	        resultMap.put("documentOID", doc.getPersistInfo().getObjectIdentifier().getId());
-	        resultMap.put("partOID", part.getPersistInfo().getObjectIdentifier().getId());
-	        
-	    } catch (Exception e) {
-	        System.err.println("Error creating search result map: " + e.getMessage());
-	    }
-	    
-	    return resultMap;
-	}
-
-	/**
-	 * 검색용 문서 속성 정보 조회
-	 */
-	private Map<String, Object> getDocumentAttributesForSearch(EPMDocument doc, WTPart part, 
-	                                                         Set<String> attributeNames, 
-	                                                         Map<String, String> attributeTypes) {
-	    Map<String, Object> attributes = new HashMap<>();
-	    
-	    for (String attrName : attributeNames) {
-	        try {
-	            String attrType = attributeTypes.get(attrName);
-	            
-	            if ("GR".equals(attrType)) {
-	                Object grValue = getGRAttributeValueForSearch(doc, attrName);
-	                if (grValue != null) {
-	                    attributes.put(attrName, grValue);
-	                }
-	            } else if ("X".equals(attrType)) {
-	                String xValue = getXAttributeValueForSearch(attrName, part.getMaster());
-	                if (xValue != null) {
-	                    attributes.put(attrName, xValue);
-	                }
-	            }
-	        } catch (Exception e) {
-	            System.err.println("Failed to get attribute " + attrName + ": " + e.getMessage());
-	        }
-	    }
-	    
-	    return attributes;
-	}
-
-	/**
-	 * 검색용 GR 속성 값 조회
-	 */
-	private Object getGRAttributeValueForSearch(EPMDocument doc, String attrName) {
-	    try {
-	        IBAHolder ibaHolder = IBAValueHelper.service.refreshAttributeContainer(doc, null, null, null);
-	        DefaultAttributeContainer container = (DefaultAttributeContainer) ibaHolder.getAttributeContainer();
-	        
-	        AttributeDefDefaultView[] attrDefs = container.getAttributeDefinitions();
-	        for (AttributeDefDefaultView attrDef : attrDefs) {
-	            if (attrName.equals(attrDef.getName())) {
-	                AbstractValueView[] attrValues = container.getAttributeValues(attrDef);
-	                if (attrValues != null && attrValues.length > 0) {
-	                    AbstractValueView value = attrValues[0];
-	                    if (value instanceof StringValueDefaultView) {
-	                        return ((StringValueDefaultView) value).getValue();
-	                    } else if (value instanceof FloatValueDefaultView) {
-	                        return ((FloatValueDefaultView) value).getValue();
-	                    } else if (value instanceof BooleanValueDefaultView) {
-	                        return (Object) ((BooleanValueDefaultView) value).getValueAsString();
-	                    } else if (value instanceof TimestampValueDefaultView) {
-	                        return ((TimestampValueDefaultView) value).getValue();
-	                    }
-	                }
-	                break;
-	            }
-	        }
-	    } catch (Exception e) {
-	        System.err.println("Failed to get GR attribute " + attrName + ": " + e.getMessage());
-	    }
-	    
-	    return null;
-	}
-
-	/**
-	 * 검색용 X 속성 값 조회
-	 */
-	private String getXAttributeValueForSearch(String attrName, WTPartMaster partMaster) {
-	    try {
+	        // 가장 단순한 WTPart 쿼리
 	        QuerySpec query = new QuerySpec();
-	        int idxStringValue3 = query.appendClassList(Stringvalue3.class, false);
-	        int idxObjectClassificationMapping = query.appendClassList(ObjectClassificationMapping.class, false);
+	        int idx = query.appendClassList(WTPart.class, true);
 	        
-	        query.setAdvancedQueryEnabled(true);
-	        
-	        // 속성명 조건
-	        query.appendWhere(new SearchCondition(ObjectClassificationMapping.class, 
-	            ObjectClassificationMapping.H2__PLM__PROP, SearchCondition.EQUAL, attrName), 
-	            new int[]{idxObjectClassificationMapping});
+	        // 기본 조건만 설정
+	        query.appendWhere(new SearchCondition(WTPart.class, "checkoutInfo.state", 
+	            new String[]{"c/i", "c/o"}, true, false), new int[]{idx});
 	        query.appendAnd();
+	        query.appendWhere(new SearchCondition(WTPart.class, Iterated.LATEST_ITERATION, 
+	            SearchCondition.IS_TRUE), new int[]{idx});
 	        
-	        // X 타입 조건
-	        query.appendWhere(new SearchCondition(ObjectClassificationMapping.class, 
-	            ObjectClassificationMapping.H2__PROP__TYPE, SearchCondition.EQUAL, "X"), 
-	            new int[]{idxObjectClassificationMapping});
-	        query.appendAnd();
-	        
-	        // Stringvalue3과 ObjectClassificationMapping 조인
-	        query.appendWhere(new SearchCondition(Stringvalue3.class, Stringvalue3.NH__CLASSIFICATION__OID, 
-	            ObjectClassificationMapping.class, "thePersistInfo.theObjectIdentifier.id"), 
-	            new int[]{idxStringValue3, idxObjectClassificationMapping});
-	        query.appendAnd();
-	        
-	        // WTPartMaster OID 조건
-	        query.appendWhere(new SearchCondition(Stringvalue3.class, Stringvalue3.NH__WTPARTMASTER__OID, 
-	            SearchCondition.EQUAL, partMaster.getPersistInfo().getObjectIdentifier().getId()), 
-	            new int[]{idxStringValue3});
+	        System.out.println("Simple Part Query: " + query.toString());
 	        
 	        QueryResult qr = PersistenceHelper.manager.find(query);
 	        
-	        if (qr.hasMoreElements()) {
-	            Object[] row = (Object[]) qr.nextElement();
-	            Stringvalue3 stringValue3 = (Stringvalue3) row[idxStringValue3];
-	            return stringValue3.getNH_VALUE();
+	        while (qr.hasMoreElements()) {
+	            WTPart part = (WTPart) qr.nextElement();
+	            
+	            // 클래스 필터링을 메모리에서 수행
+	            try {
+	                if (part.getTypeInfoWTPart() != null && 
+	                    clazz.equals(part.getTypeInfoWTPart().getPtc_str_1())) {
+	                    partList.add(part);
+	                }
+	            } catch (Exception e) {
+	                System.err.println("Error checking part class for " + part.getNumber() + ": " + e.getMessage());
+	                continue;
+	            }
 	        }
 	        
 	    } catch (Exception e) {
-	        System.err.println("Failed to get X attribute " + attrName + ": " + e.getMessage());
+	        System.err.println("Error getting candidate parts: " + e.getMessage());
+	        throw new Exception("Failed to get candidate parts: " + e.getMessage());
+	    }
+	    
+	    return partList;
+	}
+
+	/**
+	 * Part가 속성 조건과 매칭되는지 확인
+	 */
+	private boolean isPartMatchingAttributes(WTPart part, EPMDocument epmDoc, String clazz, 
+	                                       Map<String, Object> attributeParams) {
+	    try {
+	        // 속성 타입 정보 조회
+	        Map<String, String> attributeTypes = getAttributeTypesSimple(clazz, attributeParams.keySet());
+	        
+	        for (Map.Entry<String, Object> entry : attributeParams.entrySet()) {
+	            String attrName = entry.getKey();
+	            Object expectedValue = entry.getValue();
+	            String attrType = attributeTypes.get(attrName);
+	            
+	            if (attrType == null) {
+	                System.out.println("Warning: Unknown attribute type for " + attrName);
+	                continue;
+	            }
+	            
+	            Object actualValue = null;
+	            
+	            if ("GR".equals(attrType)) {
+	                actualValue = getGRAttributeValueSimple(epmDoc, attrName);
+	            } else if ("X".equals(attrType)) {
+	                actualValue = getXAttributeValueSimple(part, attrName);
+	            } else if ("LR".equals(attrType)) {
+	                actualValue = getGRAttributeValueSimple(epmDoc, attrName); // LR도 GR과 동일하게 처리
+	            }
+	            
+	            // 값 비교
+	            if (!isValueMatching(expectedValue, actualValue)) {
+	                return false;
+	            }
+	        }
+	        
+	        return true;
+	        
+	    } catch (Exception e) {
+	        System.err.println("Error matching attributes for part " + part.getNumber() + ": " + e.getMessage());
+	        return false;
+	    }
+	}
+
+	/**
+	 * 단순한 속성 타입 조회
+	 */
+	private Map<String, String> getAttributeTypesSimple(String clazz, Set<String> attributeNames) {
+	    Map<String, String> attributeTypes = new HashMap<>();
+	    
+	    for (String attrName : attributeNames) {
+	        try {
+	            String attrType = getSingleAttributeTypeSimple(clazz, attrName);
+	            if (attrType != null) {
+	                attributeTypes.put(attrName, attrType);
+	            }
+	        } catch (Exception e) {
+	            System.err.println("Error getting attribute type for " + attrName + ": " + e.getMessage());
+	        }
+	    }
+	    
+	    return attributeTypes;
+	}
+
+	/**
+	 * 개별 속성 타입 조회 (단순한 쿼리)
+	 */
+	private String getSingleAttributeTypeSimple(String clazz, String attrName) {
+	    try {
+	        // ObjectClassificationMapping을 직접 조회
+	        QuerySpec query = new QuerySpec();
+	        int idx = query.appendClassList(ObjectClassificationMapping.class, true);
+	        
+	        query.appendWhere(new SearchCondition(ObjectClassificationMapping.class, 
+	            ObjectClassificationMapping.H2__PLM__PROP, SearchCondition.EQUAL, attrName), 
+	            new int[]{idx});
+	        
+	        QueryResult qr = PersistenceHelper.manager.find(query);
+	        
+	        while (qr.hasMoreElements()) {
+	            ObjectClassificationMapping mapping = (ObjectClassificationMapping) qr.nextElement();
+	            
+	            // 해당 속성이 지정된 클래스와 연관되어 있는지 확인
+	            if (isAttributeRelatedToClass(mapping.getH2_ATNAM(), clazz)) {
+	                return mapping.getH2_PROP_TYPE();
+	            }
+	        }
+	        
+	    } catch (Exception e) {
+	        System.err.println("Error getting single attribute type for " + attrName + ": " + e.getMessage());
 	    }
 	    
 	    return null;
+	}
+
+	/**
+	 * 속성이 클래스와 연관되어 있는지 확인
+	 */
+	private boolean isAttributeRelatedToClass(String atnam, String clazz) {
+	    try {
+	        QuerySpec query = new QuerySpec();
+	        int idx = query.appendClassList(ClassItem.class, true);
+	        
+	        query.appendWhere(new SearchCondition(ClassItem.class, ClassItem.H2__CLASS, 
+	            SearchCondition.EQUAL, clazz), new int[]{idx});
+	        query.appendAnd();
+	        query.appendWhere(new SearchCondition(ClassItem.class, ClassItem.H2__ATNAM, 
+	            SearchCondition.EQUAL, atnam), new int[]{idx});
+	        
+	        QueryResult qr = PersistenceHelper.manager.find(query);
+	        return qr.hasMoreElements();
+	        
+	    } catch (Exception e) {
+	        System.err.println("Error checking attribute-class relation: " + e.getMessage());
+	        return false;
+	    }
+	}
+
+	/**
+	 * 단순한 GR 속성 값 조회
+	 */
+	private Object getGRAttributeValueSimple(EPMDocument epmDoc, String attrName) {
+	    try {
+	        // IBAUtils를 사용한 간단한 속성 값 조회
+	        String stringValue = IBAUtils.getStringValue(epmDoc, attrName);
+	        if (stringValue != null && !stringValue.trim().isEmpty()) {
+	            return stringValue.trim();
+	        }
+	        
+	        float floatValue = IBAUtils.getFloatValue(epmDoc, attrName);
+	        if (floatValue != 0f) {
+	            return floatValue;
+	        }
+	        
+	        Boolean booleanValue = IBAUtils.getBooleanValue(epmDoc, attrName);
+	        if (booleanValue != null) {
+	            return booleanValue;
+	        }
+	        
+	    } catch (Exception e) {
+	        System.err.println("Error getting GR attribute " + attrName + ": " + e.getMessage());
+	    }
+	    
+	    return null;
+	}
+
+	/**
+	 * 단순한 X 속성 값 조회
+	 */
+	private String getXAttributeValueSimple(WTPart part, String attrName) {
+	    try {
+	        // 기존 getStringValues 메서드 활용
+	        ObjectClassificationMapping ocm = getObjClassMapping(attrName);
+	        if (ocm != null) {
+	            return getStringValues(false, ocm, part, part.getMaster());
+	        }
+	    } catch (Exception e) {
+	        System.err.println("Error getting X attribute " + attrName + ": " + e.getMessage());
+	    }
+	    
+	    return null;
+	}
+
+	/**
+	 * 값 매칭 확인 (개선된 버전)
+	 */
+	private boolean isValueMatching(Object expected, Object actual) {
+	    if (expected == null && actual == null) {
+	        return true;
+	    }
+	    
+	    if (expected == null || actual == null) {
+	        return false;
+	    }
+	    
+	    // 문자열 비교
+	    String expectedStr = expected.toString().trim();
+	    String actualStr = actual.toString().trim();
+	    
+	    // 정확히 일치하는 경우
+	    if (expectedStr.equals(actualStr)) {
+	        return true;
+	    }
+	    
+	    // 대소문자 무시하고 비교
+	    if (expectedStr.equalsIgnoreCase(actualStr)) {
+	        return true;
+	    }
+	    
+	    // 숫자인 경우 숫자로 비교
+	    try {
+	        double expectedNum = Double.parseDouble(expectedStr);
+	        double actualNum = Double.parseDouble(actualStr);
+	        return Math.abs(expectedNum - actualNum) < 0.001; // 부동소수점 오차 고려
+	    } catch (NumberFormatException e) {
+	        // 숫자가 아닌 경우 무시
+	    }
+	    
+	    return false;
+	}
+
+	/**
+	 * 상세한 결과 Map 생성
+	 */
+	private Map<String, Object> createDetailedResultMap(WTPart part, EPMDocument epmDoc, String clazz, 
+	                                                   Map<String, Object> attributeParams) {
+	    Map<String, Object> resultMap = new HashMap<>();
+	    
+	    try {
+	        EPMDocumentMaster docMaster = (EPMDocumentMaster) epmDoc.getMaster();
+	        
+	        // 기본 정보
+	        resultMap.put("partNumber", part.getNumber());
+	        resultMap.put("partName", part.getName());
+	        resultMap.put("documentNumber", epmDoc.getNumber());
+	        resultMap.put("documentName", epmDoc.getName());
+	        resultMap.put("cadName", docMaster.getCADName());
+	        resultMap.put("documentType", epmDoc.getDocType().toString());
+	        resultMap.put("createdBy", epmDoc.getCreatorFullName());
+	        resultMap.put("createdTime", epmDoc.getCreateTimestamp());
+	        resultMap.put("modifiedTime", epmDoc.getModifyTimestamp());
+	        
+	        String version = epmDoc.getVersionIdentifier().getValue() + "." + 
+	                        epmDoc.getIterationIdentifier().getValue();
+	        resultMap.put("version", version);
+	        
+	        resultMap.put("documentOID", epmDoc.getPersistInfo().getObjectIdentifier().getStringValue());
+	        resultMap.put("partOID", part.getPersistInfo().getObjectIdentifier().getStringValue());
+	        resultMap.put("class", clazz);
+	        
+	        // 속성 값들 추가
+	        Map<String, Object> attributes = new HashMap<>();
+	        Map<String, String> attributeTypes = getAttributeTypesSimple(clazz, attributeParams.keySet());
+	        
+	        for (String attrName : attributeParams.keySet()) {
+	            try {
+	                String attrType = attributeTypes.get(attrName);
+	                Object attrValue = null;
+	                
+	                if ("GR".equals(attrType) || "LR".equals(attrType)) {
+	                    attrValue = getGRAttributeValueSimple(epmDoc, attrName);
+	                } else if ("X".equals(attrType)) {
+	                    attrValue = getXAttributeValueSimple(part, attrName);
+	                }
+	                
+	                if (attrValue != null) {
+	                    attributes.put(attrName, attrValue);
+	                }
+	            } catch (Exception e) {
+	                System.err.println("Error getting attribute " + attrName + " for result: " + e.getMessage());
+	            }
+	        }
+	        
+	        resultMap.put("attributes", attributes);
+	        
+	    } catch (Exception e) {
+	        System.err.println("Error creating detailed result map: " + e.getMessage());
+	        resultMap.put("error", e.getMessage());
+	    }
+	    
+	    return resultMap;
 	}
 	
 	//
