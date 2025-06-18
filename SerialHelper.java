@@ -383,22 +383,7 @@ public class SerialHelper {
 				dataMap.put("Success", wpsl.getH2_IF_SUCCESS_DIV()); // 검증
 				// 검토자
 				// 승인자
-				Date nowDate = timestamp;
-				Date getDate = wpsl.getH2_TARGET_REGISTER_DATE();
-
-				if (getDate != null) {
-					String checkStatus = Objects.toString(wpsl.getH2_TARGET_STATUS(), "");//
-					String nowLocalDate = dateSdf.format(nowDate);
-					String getLocalDate = dateSdf.format(getDate);
-
-					if (nowLocalDate.equals(getLocalDate) && checkStatus.equals("채번완료")) {
-						dataMap.put("Color", "Y");
-					} else {
-						dataMap.put("Color", "N");
-					}
-				} else {
-					dataMap.put("Color", "N");
-				}
+                                dataMap.put("Color", determineColor(wpsl));
 
 				resultList.add(dataMap);
 			}
@@ -409,46 +394,49 @@ public class SerialHelper {
 		return sortByFileName(resultList);
 	}
 
-	public static List<Map<String, Object>> sortByFileName(List<Map<String, Object>> resultList) {
-		List<Map<String, Object>> sortedList = new ArrayList<>(resultList);
+        private static final java.util.Comparator<Map<String, Object>> FILE_NAME_COMPARATOR = (map1, map2) -> {
+                String color1 = (String) map1.get("Color");
+                String color2 = (String) map2.get("Color");
 
-		sortedList.sort(new java.util.Comparator<Map<String, Object>>() {
-			@Override
-			public int compare(Map<String, Object> map1, Map<String, Object> map2) {
+                if ("Y".equals(color1) && !"Y".equals(color2)) {
+                        return -1;
+                }
+                if (!"Y".equals(color1) && "Y".equals(color2)) {
+                        return 1;
+                }
 
-				String color1 = (String) map1.get("Color");
-				String color2 = (String) map2.get("Color");
+                String fileName1 = (String) map1.get("FileName");
+                String fileName2 = (String) map2.get("FileName");
 
-				if ("Y".equals(color1) && !"Y".equals(color2)) {
-					return -1; // map1이 앞
-				}
-				if (!"Y".equals(color1) && "Y".equals(color2)) {
-					return 1; // map2가 앞
-				}
+                if ((fileName1 == null || fileName1.isEmpty()) && (fileName2 != null && !fileName2.isEmpty())) {
+                        return 1;
+                }
+                if ((fileName1 != null && !fileName1.isEmpty()) && (fileName2 == null || fileName2.isEmpty())) {
+                        return -1;
+                }
 
-				String fileName1 = (String) map1.get("FileName");
-				String fileName2 = (String) map2.get("FileName");
+                return java.util.Objects.toString(fileName1, "").compareTo(java.util.Objects.toString(fileName2, ""));
+        };
 
-				if ("".equals(fileName1) && !"".equals(fileName2)) {
-					return 1; // fileName1이 빈 값이면 뒤로
-				}
-				if (!"".equals(fileName1) && "".equals(fileName2)) {
-					return -1; // fileName2가 빈 값이면 뒤로
-				}
+        public static List<Map<String, Object>> sortByFileName(List<Map<String, Object>> resultList) {
+                List<Map<String, Object>> sortedList = new ArrayList<>(resultList);
+                sortedList.sort(FILE_NAME_COMPARATOR);
+                return sortedList;
+        }
 
-				if (fileName1 == null && fileName2 != null) {
-					return 1; // fileName1이 null이면 뒤로
-				}
-				if (fileName1 != null && fileName2 == null) {
-					return -1; // fileName2가 null이면 뒤로
-				}
-
-				return fileName1.compareTo(fileName2);
-			}
-		});
-
-		return sortedList;
-	}
+        private static String determineColor(WTPartSerialList wpsl) {
+                Date nowDate = timestamp;
+                Date getDate = wpsl.getH2_TARGET_REGISTER_DATE();
+                if (getDate != null) {
+                        String checkStatus = Objects.toString(wpsl.getH2_TARGET_STATUS(), "");
+                        String nowLocalDate = dateSdf.format(nowDate);
+                        String getLocalDate = dateSdf.format(getDate);
+                        if (nowLocalDate.equals(getLocalDate) && "채번완료".equals(checkStatus)) {
+                                return "Y";
+                        }
+                }
+                return "N";
+        }
 
 	// getPartList
 	public Map<String, Object> getWTPartListWithEPMDocument(Map<String, Object> params) throws Exception {
