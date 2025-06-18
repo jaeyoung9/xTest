@@ -67,6 +67,7 @@ import wt.iba.value.litevalue.FloatValueDefaultView;
 import wt.iba.value.litevalue.StringValueDefaultView;
 import wt.iba.value.litevalue.TimestampValueDefaultView;
 import wt.iba.value.service.IBAValueHelper;
+import wt.inf.container.WTContainer;
 import wt.inf.container.WTContainerRef;
 import wt.ixb.handlers.forattributes.IBAValues;
 import wt.lifecycle.LifeCycleHelper;
@@ -86,6 +87,7 @@ import wt.query.QuerySpec;
 import wt.query.SearchCondition;
 import wt.services.ServiceFactory;
 import wt.session.SessionHelper;
+import wt.util.WTPropertyVetoException;
 import wt.vc.Iterated;
 import wt.vc.VersionControlHelper;
 import wt.vc.views.View;
@@ -113,8 +115,21 @@ public class SerialHelper {
     // 상수 정의
     private static final int MAX_NAME_LENGTH = 26;
     private static final int MAX_FIELD_LENGTH = 100;
-    private static final String DEFAULT_NAME = "notName";
     private static final String LIFECYCLE_STATE_RELEASED = "CR";
+
+    private static final String ERROR_MATNR = "ERROR";
+    private static final String DEFAULT_NAME = "notName";
+    private static final String DEFAULT_FOLDER_PATH = "/Default";
+    private static final String LIFECYCLE_TEMPLATE = "TNS_STANDARD";
+    private static final String VIEW_NAME = "M-BOM";
+    private static final int MAX_NAME_LENGTH1 = 30;
+    private static final String DESC_FLAG_VALUE = "X";
+    
+    // 제거할 속성 키 목록
+    private static final Set<String> EXCLUDED_ATTRIBUTES = Set.of(
+        "partSerialListOID", "serialListOID", "partOID", 
+        "Class", "serialListMappingOID", "epmDocumentOID"
+    );
     
 	static {
 		dateSdf = new SimpleDateFormat("yyyyMMdd");
@@ -947,7 +962,7 @@ public class SerialHelper {
 				query.appendWhere(new SearchCondition(Stringvalue3.class, Stringvalue3.NH__CLASSIFICATION__OID,
 						SearchCondition.EQUAL, OCMOidSplit), idx);
 			}
-
+			System.out.println("getStringValues::: " + query.toString());
 			QueryResult results = PersistenceHelper.manager.find(query);
 			while (results.hasMoreElements()) {
 				Object[] obj = (Object[]) results.nextElement();
@@ -1272,6 +1287,7 @@ public class SerialHelper {
 				}
 			}
 		} catch (Exception e) {
+			
 			e.printStackTrace();
 			throw e;
 		}
@@ -1567,18 +1583,32 @@ public class SerialHelper {
 	 * @return
 	 * @throws Exception
 	 */
-	public ObjectClassificationMapping getObjClassMapping(String value) throws Exception {
+	public ObjectClassificationMapping getObjClassMapping(String clazz, String value) throws Exception {
 		ObjectClassificationMapping obj = null;
 
 		QuerySpec query = new QuerySpec();
 		int idx = query.appendClassList(ObjectClassificationMapping.class, true);
+		int idxClassItem = query.appendClassList(ClassItem.class, true);
 
 		SearchCondition sc = new SearchCondition();
+		
+		sc = new SearchCondition(ClassItem.class, ClassItem.H2__CLASS, "=",
+				clazz);
+		query.appendWhere(sc, new int[] { idxClassItem });
+		
+		query.appendAnd();
+		
+		sc = new SearchCondition(ClassItem.class, ClassItem.H2__ATNAM,
+				ObjectClassificationMapping.class, ObjectClassificationMapping.H2__ATNAM
+				);
+		query.appendWhere(sc, new int[] { idxClassItem, idx });
+		
+		query.appendAnd();
 
 		sc = new SearchCondition(ObjectClassificationMapping.class, ObjectClassificationMapping.H2__PLM__PROP, "=",
 				value);
 		query.appendWhere(sc, new int[] { idx });
-
+		System.out.println("" + query.toString());
 		QueryResult qr = PersistenceHelper.manager.find(query);
 
 		if (qr.hasMoreElements()) {
@@ -2004,147 +2034,309 @@ public class SerialHelper {
 	// ------------------------------------------------------------------------------------------------
 	// 특수 목적 채번
 	//
-	public String actionSpecialSerial(List<Map<String, Object>> datas, Map<String, Object> result) throws Exception {
-		System.out.println("!!!!!!!!!!!!!!!!!!actionSpecialSerial: " + datas);
-		Transaction tnx = null;
-		try {
-			tnx = new Transaction();
-			tnx.start();
-
-			// 특수 채번 품번
-			String MATNR = Objects.toString(result.get("MATNR"), "ERROR"); // S4940500012 .... H4940500012
-			if (MATNR.equals("ERROR")) {
-				throw new Exception("Message: MATNR ERROR");
-			}
-			// 특수 목적 채번
-			for (Map<String, Object> data : datas) {
-				Map<String, Object> editMap = new HashMap<>();
-				Map<String, Object> editMapAction = new HashMap<>();
-				WTPrincipal prin = SessionHelper.manager.getPrincipal();
-				String outClass = Objects.toString(data.get("Class"), ""); // Class 분류체계
-				String partOID = Objects.toString(data.get("partOID"), ""); // partOID 자재oid
-
-				WTPart wp = (WTPart) getClasszz(partOID); // 기존 데이터 조회
-
-				// 속성 Find 조건
-				editMapAction.put("partOID", partOID);
-				editMapAction.put("Class", outClass);
-				editMap.put("1", editMapAction);
-
-				// 속성 Find
-				Map<String, Object> attributeEdit = getWTPartToEdit(editMap);
-				// attributeEdit objectOid, class 제거 하드코딩...
-				attributeEdit.remove("partSerialListOID");
-				attributeEdit.remove("serialListOID");
-				attributeEdit.remove("partOID");
-				attributeEdit.remove("Class");
-				attributeEdit.remove("serialListMappingOID");
-				attributeEdit.remove("epmDocumentOID");
-
-				// TODO: 속성 저장
-				attributeEdit.forEach((key, value) -> {
-					System.out.println("Check: " + key + ":" + value);
-				});
-
-				// ClassHeader 불러오기
-				ClassHeader ch = getFindClassHeader(outClass);
-				// ClassItem 불러오기
-				List<Map<String, Object>> findClassItem = getFindClassItem(outClass);
-
-				System.out.println("findClassItem: " + findClassItem);
-				// H2_DESC_ORDER
-				String pd = "";
-				pd = ch.getH2_PREFIX_DESC();
-				// String newName = MATNR;
-				String newName = "";
-				if (!pd.equals("")) {
-					// newName += ":" + pd;
-					newName += pd;
-				}
-
-				for (Map<String, Object> item : findClassItem) {
-					String findCodeName = (String) item.get("H2_ATBEZ");
-					Object value = attributeEdit.get(findCodeName);
-					if (value != null) {
-						if (newName.equals("")) {
-							newName += value.toString();
-						} else {
-							newName += ":" + value.toString();
-						}
-					}
-				}
-				String lengthName = "";
-				if (newName.length() > 30) {
-					lengthName = newName.substring(0, 30);
-				}
-				System.out.println("newName: " + newName);
-				WTPart nwp = WTPart.newWTPart();
-
-				// Class 저장
-				WTPartTypeInfo partTypeInfo = new WTPartTypeInfo();
-				partTypeInfo.setPtc_str_1(outClass);
-				nwp.setTypeInfoWTPart(partTypeInfo);
-				// 단위 저장
-				nwp.setDefaultUnit(wp.getDefaultUnit());
-				// 소유자 저장
-				nwp.setOwnership(Ownership.newOwnership(prin));
-
-				// 이름 저장, 번호 저장
-				nwp.setNumber(MATNR);
-				nwp.setName(!lengthName.equals("") ? lengthName : newName.equals("") ? "notName" : newName);
-
-				// 기존 컨테이너 불러오기
-				wt.inf.container.WTContainer container = wp.getContainer();
-				WTContainerRef containerRef = WTContainerRef.newWTContainerRef(container);
-				// 컨테이너 폴더 저장
-				nwp.setContainerReference(containerRef);
-
-				// 라이프 사이클
-				LifeCycleTemplateReference lcRef = LifeCycleHelper.service.getLifeCycleTemplateReference("TNS_STANDARD",
-						containerRef);
-				nwp = (WTPart) LifeCycleHelper.setLifeCycle(nwp, lcRef);
-
-				// 부품 M-BOM 할당
-				View view = null;
-				view = ViewHelper.service.getView("M-BOM");
-				ViewHelper.assignToView(nwp, view);
-
-				// 부품을 폴더에 할당
-				String folderPath = wp.getFolderingInfo().getLocation(); // wp.getFolderPath();
-				System.out.println("folderPath: " + folderPath);
-				if (folderPath == null || folderPath.trim().isEmpty()) {
-					folderPath = "/Default";
-				}
-
-				Folder folder = FolderHelper.service.getFolder(folderPath, containerRef);
-				FolderHelper.assignLocation((FolderEntry) nwp, folder);
-
-				// 부품 저장
-				nwp = (WTPart) PersistenceHelper.manager.save(nwp);
-				nwp = (WTPart) PersistenceHelper.manager.refresh(nwp);
-				nwp = (WTPart) CommonUtils.actionPartAndEPMLifeCycleUpdate(nwp);
-				LifeCycleHelper.service.setLifeCycleState(nwp, State.toState(CR));
-
-			}
-
-			// tnx.rollback();
-			tnx.commit();
-			tnx = null;
-		} catch (Exception e) {
-			if (tnx != null) {
-				tnx.rollback();
-			}
-
-			System.out.println("Error: " + e.getMessage());
+    public String actionSpecialSerial(List<Map<String, Object>> datas, 
+                                    Map<String, Object> result) throws Exception {
+        
+        String matnr = extractMatnr(result);
+        Transaction transaction = null;
+        
+        try {
+            transaction = new Transaction();
+            transaction.start();
+            
+            for (Map<String, Object> data : datas) {
+                processSpecialSerial(data, matnr);
+            }
+            
+            transaction.commit();
+            return "message: 성공";
+            
+        } catch (Exception e) {
+            rollbackTransaction(transaction);
+            System.out.println("특수 채번 처리 중 오류 발생" + e);
+            throw e;
+        }
+    }
+    
+    /**
+     * MATNR 값 추출 및 검증
+     */
+    private String extractMatnr(Map<String, Object> result) throws Exception {
+        String matnr = Objects.toString(result.get("MATNR"), ERROR_MATNR);
+        
+        if (ERROR_MATNR.equals(matnr)) {
+            throw new Exception("MATNR 값이 유효하지 않습니다.");
+        }
+        
+        return matnr;
+    }
+    
+    /**
+     * 개별 특수 채번 처리
+     */
+    private void processSpecialSerial(Map<String, Object> data, String matnr) throws Exception {
+        String classification = Objects.toString(data.get("Class"), "");
+        String partOID = Objects.toString(data.get("partOID"), "");
+        
+        WTPart originalPart = getWTPart(partOID);
+        Map<String, Object> attributes = extractPartAttributes(partOID, classification);
+        
+        WTPart newPart = createNewWTPart(originalPart, attributes, classification, matnr);
+        saveAndUpdateLifecycle(newPart);
+    }
+    
+    /**
+     * WTPart 속성 추출
+     */
+    private Map<String, Object> extractPartAttributes(String partOID, String classification) throws Exception {
+        Map<String, Object> editMap = new HashMap<>();
+        Map<String, Object> editMapAction = new HashMap<>();
+        
+        editMapAction.put("partOID", partOID);
+        editMapAction.put("Class", classification);
+        editMap.put("1", editMapAction);
+        
+        Map<String, Object> attributes = getWTPartToEdit(editMap);
+        
+        // 불필요한 속성 제거
+        attributes.entrySet().removeIf(entry -> EXCLUDED_ATTRIBUTES.contains(entry.getKey()));
+        
+        logAttributes(attributes);
+        return attributes;
+    }
+    
+    /**
+     * 새로운 WTPart 생성
+     */
+    private WTPart createNewWTPart(WTPart originalPart, Map<String, Object> attributes, 
+                                  String classification, String matnr) throws Exception {
+        
+        ClassHeader classHeader = getFindClassHeader(classification);
+        List<Map<String, Object>> classItems = getFindClassItem(classification);
+        
+        String partName = generatePartName(classHeader, classItems, attributes);
+        
+        WTPart newPart = WTPart.newWTPart();
+        
+        // 기본 정보 설정
+        setBasicInfo(newPart, matnr, partName);
+        
+        // 분류 정보 설정
+        setClassification(newPart, classification);
+        
+        // 단위 및 소유자 설정
+        setUnitAndOwnership(newPart, originalPart);
+        
+        // 컨테이너 및 폴더 설정
+        setContainerAndFolder(newPart, originalPart);
+        
+        // 라이프사이클 설정
+        setLifecycle(newPart, originalPart.getContainer());
+        
+        // 뷰 할당
+        assignView(newPart);
+        
+        return newPart;
+    }
+    
+    /**
+     * 부품명 생성
+     */
+    private String generatePartName(ClassHeader classHeader, 
+                                   List<Map<String, Object>> classItems, 
+                                   Map<String, Object> attributes) {
+        
+        StringBuilder nameBuilder = new StringBuilder();
+        
+        // Prefix 추가
+        String prefix = classHeader.getH2_PREFIX_DESC();
+        if (!prefix.isEmpty()) {
+            nameBuilder.append(prefix);
+        }
+        
+        // 속성값 추가
+        for (Map<String, Object> item : classItems) {
+            String attrName = (String) item.get("H2_ATBEZ");
+            Object value = attributes.get(attrName);
+            
+            if (value != null) {
+                if (nameBuilder.length() > 0) {
+                    nameBuilder.append(":");
+                }
+                nameBuilder.append(value.toString());
+            }
+        }
+        
+        String name = nameBuilder.toString();
+        
+        // 이름 길이 제한
+        if (name.length() > MAX_NAME_LENGTH1) {
+            name = name.substring(0, MAX_NAME_LENGTH1);
+        }
+        
+        return name.isEmpty() ? DEFAULT_NAME : name;
+    }
+    
+    /**
+     * 기본 정보 설정
+     */
+    private void setBasicInfo(WTPart part, String number, String name) {
+        try {
+			part.setNumber(number);
+			part.setName(name);
+		} catch (WTPropertyVetoException e) {
 			e.printStackTrace();
-			throw e;
-
 		}
-		return "message: 성공";
-	}
+    }
+    
+    /**
+     * 분류 정보 설정
+     */
+    private void setClassification(WTPart part, String classification) {
+        WTPartTypeInfo partTypeInfo = new WTPartTypeInfo();
+        try {
+			partTypeInfo.setPtc_str_1(classification);
+		} catch (WTPropertyVetoException e) {
+			e.printStackTrace();
+		}
+        part.setTypeInfoWTPart(partTypeInfo);
+    }
+    
+    /**
+     * 단위 및 소유자 설정
+     */
+    private void setUnitAndOwnership(WTPart newPart, WTPart originalPart) throws Exception {
+        newPart.setDefaultUnit(originalPart.getDefaultUnit());
+        
+        WTPrincipal principal = SessionHelper.manager.getPrincipal();
+        newPart.setOwnership(Ownership.newOwnership(principal));
+    }
+    
+    /**
+     * 컨테이너 및 폴더 설정
+     */
+    private void setContainerAndFolder(WTPart newPart, WTPart originalPart) throws Exception {
+        WTContainer container = originalPart.getContainer();
+        WTContainerRef containerRef = WTContainerRef.newWTContainerRef(container);
+        newPart.setContainerReference(containerRef);
+        
+        String folderPath = getFolderPath(originalPart);
+        Folder folder = FolderHelper.service.getFolder(folderPath, containerRef);
+        FolderHelper.assignLocation((FolderEntry) newPart, folder);
+    }
+    
+    /**
+     * 폴더 경로 추출
+     */
+    private String getFolderPath(WTPart part) {
+        String folderPath = part.getFolderingInfo().getLocation();
+        
+        if (folderPath == null || folderPath.trim().isEmpty()) {
+            folderPath = DEFAULT_FOLDER_PATH;
+        }
+        
+        return folderPath;
+    }
+    
+    /**
+     * 라이프사이클 설정
+     */
+    private void setLifecycle(WTPart part, WTContainer container) throws Exception {
+        WTContainerRef containerRef = WTContainerRef.newWTContainerRef(container);
+        LifeCycleTemplateReference lcRef = LifeCycleHelper.service
+            .getLifeCycleTemplateReference(LIFECYCLE_TEMPLATE, containerRef);
+        LifeCycleHelper.setLifeCycle(part, lcRef);
+    }
+    
+    /**
+     * 뷰 할당
+     */
+    private void assignView(WTPart part) throws Exception {
+        View view = ViewHelper.service.getView(VIEW_NAME);
+        ViewHelper.assignToView(part, view);
+    }
+    
+    /**
+     * 부품 저장 및 라이프사이클 업데이트
+     */
+    private void saveAndUpdateLifecycle(WTPart part) throws Exception {
+        part = (WTPart) PersistenceHelper.manager.save(part);
+        part = (WTPart) PersistenceHelper.manager.refresh(part);
+        part = (WTPart) CommonUtils.actionPartAndEPMLifeCycleUpdate(part);
+        LifeCycleHelper.service.setLifeCycleState(part, State.toState("CR"));
+    }
+    
+    /**
+     * 클래스 아이템 조회
+     */
+    public List<Map<String, Object>> getFindClassItem(String classification) throws Exception {
+        QuerySpec query = buildClassItemQuery(classification);
+        return executeClassItemQuery(query);
+    }
+    
+    /**
+     * 클래스 아이템 쿼리 생성
+     */
+    private QuerySpec buildClassItemQuery(String classification) throws Exception {
+        QuerySpec query = new QuerySpec();
+        int idx = query.appendClassList(ClassItem.class, true);
+        
+        // Class 조건
+        SearchCondition classCondition = new SearchCondition(
+            ClassItem.class, "H2_CLASS", SearchCondition.EQUAL, classification
+        );
+        query.appendWhere(classCondition, new int[] { idx });
+        
+        // DESC_FLAG 조건
+        query.appendAnd();
+        SearchCondition flagCondition = new SearchCondition(
+            ClassItem.class, "H2_DESC_FLAG", SearchCondition.EQUAL, DESC_FLAG_VALUE
+        );
+        query.appendWhere(flagCondition, new int[] { idx });
+        
+        // 정렬 조건
+        ClassAttribute orderAttr = new ClassAttribute(ClassItem.class, ClassItem.H2__DESC__ORDER);
+        query.appendOrderBy(new OrderBy(orderAttr, false), new int[] { idx });
+        
+        return query;
+    }
+    
+    /**
+     * 클래스 아이템 쿼리 실행
+     */
+    private List<Map<String, Object>> executeClassItemQuery(QuerySpec query) throws Exception {
+        List<Map<String, Object>> results = new ArrayList<>();
+        QueryResult queryResult = PersistenceHelper.manager.find(query);
+        
+        while (queryResult.hasMoreElements()) {
+            Object[] row = (Object[]) queryResult.nextElement();
+            ClassItem item = (ClassItem) row[0];
+            
+            Map<String, Object> data = new HashMap<>();
+            data.put("H2_ATBEZ", item.getH2_ATBEZ());
+            data.put("H2_DESC_ORDER", item.getH2_DESC_ORDER());
+            
+            results.add(data);
+        }
+        
+        return results;
+    }
+    
+    /**
+     * 속성 로깅
+     */
+    private void logAttributes(Map<String, Object> attributes) {
+        attributes.forEach((key, value) -> 
+            System.out.println("속성 확인: " + key + " = " + value)
+        );
+    }
+    
+    private WTPart getWTPart(String partOID) throws Exception {
+        return (WTPart) getClasszz(partOID);
+    }
 
 	// select * from classitem where h2_class= 'CL51000008';
-	public List<Map<String, Object>> getFindClassItem(String Class) throws Exception {
+	public List<Map<String, Object>> getFindClassItems(String Class) throws Exception {
 		List<Map<String, Object>> datas = new ArrayList<>();
 		QuerySpec query = new QuerySpec();
 		int idx = query.appendClassList(ClassItem.class, true);
@@ -2333,8 +2525,6 @@ public class SerialHelper {
 	
 	/**
 	 * 속성 기반 유사 EPMDocument 검색 (안전한 버전)
-	 * - 단순한 쿼리만 사용하여 안정성 보장
-	 * - 복잡한 조인 없이 단계별 검색
 	 */
 	public List<Map<String, Object>> getSimilarEPMDocumentByAttributes(Map<String, Object> params) throws Exception {
 	    List<Map<String, Object>> resultList = new ArrayList<>();
@@ -2343,15 +2533,27 @@ public class SerialHelper {
 	        // 1. 입력 파라미터 검증
 	        String clazz = Objects.toString(params.get("Class"), "").trim();
 	        if (clazz.isEmpty()) {
-	            throw new Exception("Class parameter is required");
+	        	//throw new Exception("Class parameter is required");
+	        	System.out.println("Class parameter is required");
+	            throw new Exception("선택된 분류 체계가 없습니다.");
 	        }
 
 	        // 2. 동적 속성 파라미터 추출
 	        Map<String, Object> attributeParams = extractValidAttributeParams(params);
 	        if (attributeParams.isEmpty()) {
 	            System.out.println("No valid attribute parameters found");
-	            return resultList;
+	            throw new Exception("검색 조건이 빈 값입니다.");
+	            //return resultList;
 	        }
+	        
+	        // 검색 조건 출력
+	        System.out.println("=== 검색 조건 ===");
+	        System.out.println("Class: " + clazz);
+	        System.out.println("Search Attributes:");
+	        for (Map.Entry<String, Object> entry : attributeParams.entrySet()) {
+	            System.out.println("  - " + entry.getKey() + " = " + entry.getValue());
+	        }
+	        System.out.println("================");
 
 	        // 3. 안전한 단계별 검색 실행
 	        resultList = executeSafeSearch(clazz, attributeParams);
@@ -2361,7 +2563,8 @@ public class SerialHelper {
 	    } catch (Exception e) {
 	        System.err.println("Error in getSimilarEPMDocumentByAttributes: " + e.getMessage());
 	        e.printStackTrace();
-	        throw new Exception("Failed to search EPMDocuments: " + e.getMessage());
+	        //throw new Exception("Failed to search EPMDocuments: " + e.getMessage());
+	        throw new Exception("message: " + e.getMessage());
 	    }
 
 	    return resultList;
@@ -2433,7 +2636,8 @@ public class SerialHelper {
 	        QueryResult qr = PersistenceHelper.manager.find(query);
 	        
 	        while (qr.hasMoreElements()) {
-	            WTPart part = (WTPart) qr.nextElement();
+	        	Object[] obj = (Object[]) qr.nextElement();
+	            WTPart part = (WTPart) obj[0];
 	            
 	            // 클래스 필터링을 메모리에서 수행
 	            try {
@@ -2457,6 +2661,7 @@ public class SerialHelper {
 
 	/**
 	 * Part가 속성 조건과 매칭되는지 확인
+	 * params의 모든 속성 값이 자재의 실제 속성 값과 일치하는지 검사
 	 */
 	private boolean isPartMatchingAttributes(WTPart part, EPMDocument epmDoc, String clazz, 
 	                                       Map<String, Object> attributeParams) {
@@ -2464,33 +2669,49 @@ public class SerialHelper {
 	        // 속성 타입 정보 조회
 	        Map<String, String> attributeTypes = getAttributeTypesSimple(clazz, attributeParams.keySet());
 	        
+	        int matchedCount = 0;
+	        int totalSearchCount = attributeParams.size();
+	        
 	        for (Map.Entry<String, Object> entry : attributeParams.entrySet()) {
 	            String attrName = entry.getKey();
 	            Object expectedValue = entry.getValue();
 	            String attrType = attributeTypes.get(attrName);
 	            
 	            if (attrType == null) {
-	                System.out.println("Warning: Unknown attribute type for " + attrName);
+	                System.out.println("Warning: Unknown attribute type for " + attrName + " in class " + clazz);
 	                continue;
 	            }
 	            
 	            Object actualValue = null;
 	            
+	            // 속성 타입에 따라 실제 값 조회
 	            if ("GR".equals(attrType)) {
 	                actualValue = getGRAttributeValueSimple(epmDoc, attrName);
 	            } else if ("X".equals(attrType)) {
-	                actualValue = getXAttributeValueSimple(part, attrName);
+	                actualValue = getXAttributeValueSimple(clazz, part, attrName);
 	            } else if ("LR".equals(attrType)) {
 	                actualValue = getGRAttributeValueSimple(epmDoc, attrName); // LR도 GR과 동일하게 처리
 	            }
 	            
-	            // 값 비교
-	            if (!isValueMatching(expectedValue, actualValue)) {
+	            // 값 매칭 확인
+	            if (actualValue != null && isValueMatching(expectedValue, actualValue)) {
+	                matchedCount++;
+	                System.out.println("✓ Matched attribute [" + attrName + "]: expected=" + expectedValue + ", actual=" + actualValue);
+	            } else {
+	                System.out.println("✗ No match for attribute [" + attrName + "]: expected=" + expectedValue + ", actual=" + actualValue);
+	                // 하나라도 매칭되지 않으면 해당 자재는 제외
 	                return false;
 	            }
 	        }
 	        
-	        return true;
+	        // 모든 검색 조건이 매칭되어야 true 반환
+	        boolean isFullMatch = (matchedCount == totalSearchCount && totalSearchCount > 0);
+	        
+	        if (isFullMatch) {
+	            System.out.println("✅ Part " + part.getNumber() + " matches ALL attributes (" + matchedCount + "/" + totalSearchCount + ")");
+	        }
+	        
+	        return isFullMatch;
 	        
 	    } catch (Exception e) {
 	        System.err.println("Error matching attributes for part " + part.getNumber() + ": " + e.getMessage());
@@ -2534,7 +2755,8 @@ public class SerialHelper {
 	        QueryResult qr = PersistenceHelper.manager.find(query);
 	        
 	        while (qr.hasMoreElements()) {
-	            ObjectClassificationMapping mapping = (ObjectClassificationMapping) qr.nextElement();
+	        	Object[] obj = (Object[]) qr.nextElement();
+	            ObjectClassificationMapping mapping = (ObjectClassificationMapping) obj[0];
 	            
 	            // 해당 속성이 지정된 클래스와 연관되어 있는지 확인
 	            if (isAttributeRelatedToClass(mapping.getH2_ATNAM(), clazz)) {
@@ -2603,10 +2825,10 @@ public class SerialHelper {
 	/**
 	 * 단순한 X 속성 값 조회
 	 */
-	private String getXAttributeValueSimple(WTPart part, String attrName) {
+	private String getXAttributeValueSimple(String clazz, WTPart part, String attrName) {
 	    try {
 	        // 기존 getStringValues 메서드 활용
-	        ObjectClassificationMapping ocm = getObjClassMapping(attrName);
+	        ObjectClassificationMapping ocm = getObjClassMapping(clazz, attrName);
 	        if (ocm != null) {
 	            return getStringValues(false, ocm, part, part.getMaster());
 	        }
@@ -2666,8 +2888,10 @@ public class SerialHelper {
 	        EPMDocumentMaster docMaster = (EPMDocumentMaster) epmDoc.getMaster();
 	        
 	        // 기본 정보
+	        ClassHeader ch = getFindClassHeader(clazz);
 	        resultMap.put("partNumber", part.getNumber());
 	        resultMap.put("partName", part.getName());
+	        resultMap.put("thumbnail",  CommonUtils.thumbnails(part.getPersistInfo().getObjectIdentifier().getStringValue())[0]);
 	        resultMap.put("documentNumber", epmDoc.getNumber());
 	        resultMap.put("documentName", epmDoc.getName());
 	        resultMap.put("cadName", docMaster.getCADName());
@@ -2675,39 +2899,51 @@ public class SerialHelper {
 	        resultMap.put("createdBy", epmDoc.getCreatorFullName());
 	        resultMap.put("createdTime", epmDoc.getCreateTimestamp());
 	        resultMap.put("modifiedTime", epmDoc.getModifyTimestamp());
+	        resultMap.put("status", part.getState().toString());
 	        
 	        String version = epmDoc.getVersionIdentifier().getValue() + "." + 
 	                        epmDoc.getIterationIdentifier().getValue();
 	        resultMap.put("version", version);
 	        
-	        resultMap.put("documentOID", epmDoc.getPersistInfo().getObjectIdentifier().getStringValue());
+	        resultMap.put("epmDocumentOID", epmDoc.getPersistInfo().getObjectIdentifier().getStringValue());
 	        resultMap.put("partOID", part.getPersistInfo().getObjectIdentifier().getStringValue());
-	        resultMap.put("class", clazz);
+	        resultMap.put("Class", clazz);
+	        resultMap.put("className",  ch != null ? ch.getH2_KSCHL() : "");
 	        
-	        // 속성 값들 추가
-	        Map<String, Object> attributes = new HashMap<>();
+	        // 매칭된 속성 정보만 추가 (검색 조건으로 사용된 것들)
+	        Map<String, Object> matchedAttributes = new HashMap<>();
 	        Map<String, String> attributeTypes = getAttributeTypesSimple(clazz, attributeParams.keySet());
 	        
-	        for (String attrName : attributeParams.keySet()) {
+	        for (Map.Entry<String, Object> paramEntry : attributeParams.entrySet()) {
+	            String attrName = paramEntry.getKey();
+	            Object searchValue = paramEntry.getValue();
+	            
 	            try {
 	                String attrType = attributeTypes.get(attrName);
-	                Object attrValue = null;
+	                Object actualValue = null;
 	                
 	                if ("GR".equals(attrType) || "LR".equals(attrType)) {
-	                    attrValue = getGRAttributeValueSimple(epmDoc, attrName);
+	                    actualValue = getGRAttributeValueSimple(epmDoc, attrName);
 	                } else if ("X".equals(attrType)) {
-	                    attrValue = getXAttributeValueSimple(part, attrName);
+	                    actualValue = getXAttributeValueSimple(clazz, part, attrName);
 	                }
 	                
-	                if (attrValue != null) {
-	                    attributes.put(attrName, attrValue);
+	                // 매칭된 속성만 결과에 포함
+	                if (actualValue != null && isValueMatching(searchValue, actualValue)) {
+	                    Map<String, Object> attrInfo = new HashMap<>();
+	                    attrInfo.put("searchValue", searchValue);
+	                    attrInfo.put("actualValue", actualValue);
+	                    attrInfo.put("type", attrType);
+	                    matchedAttributes.put(attrName, attrInfo);
 	                }
 	            } catch (Exception e) {
-	                System.err.println("Error getting attribute " + attrName + " for result: " + e.getMessage());
+	                System.err.println("Error processing attribute " + attrName + " for result: " + e.getMessage());
 	            }
 	        }
 	        
-	        resultMap.put("attributes", attributes);
+	        resultMap.put("matchedAttributes", matchedAttributes);
+	        resultMap.put("matchedCount", matchedAttributes.size());
+	        resultMap.put("totalSearchAttributes", attributeParams.size());
 	        
 	    } catch (Exception e) {
 	        System.err.println("Error creating detailed result map: " + e.getMessage());
@@ -2991,7 +3227,7 @@ public class SerialHelper {
 	    private NumberingData createPartNumberingData(SerialApprovalContext context) {
 	        String matnr = extractMATNR(context.matchedResult);
 	        String originalName = context.part.getMaster().getName();
-	        String adjustedName = adjustNameLength(originalName, MAX_NAME_LENGTH);
+	        String adjustedName = adjustNameLength2(originalName, MAX_NAME_LENGTH);
 	        
 	        return new NumberingData(matnr, adjustedName);
 	    }
@@ -3125,19 +3361,21 @@ public class SerialHelper {
 	     */
 	    private void process2DDocument(EPMDocument epm2d, NumberingData baseData) throws Exception {
 	        String drawingNumber = baseData.number + ".drw";
-	        String drawingName = adjustNameLength(baseData.name, MAX_NAME_LENGTH) + ".drw";
-	        
+	        String drawingName = adjustNameLength2(baseData.name, MAX_NAME_LENGTH) + ".drw";
 	        NumberingData drawingData = new NumberingData(drawingNumber, drawingName);
+	        System.out.println("KKKKKKKKKK ::: "  + drawingData);
 	        updateEPMDocumentIdentity(epm2d, drawingData);
 	        
 	        String fileName = createCADFileName(epm2d, drawingData);
-	        updateCADFileName(epm2d, fileName);
+	        
+	        updateCADFileName(epm2d, drawingName);
 	    }
 	    
 	    /**
 	     * EPMDocument Identity 업데이트
 	     */
 	    private void updateEPMDocumentIdentity(EPMDocument epm, NumberingData data) throws Exception {
+	    	System.out.println("OOOOOOOOO "  + data);
 	        EPMDocumentMaster master = (EPMDocumentMaster) epm.getMaster();
 	        EPMDocumentMasterIdentity identity = (EPMDocumentMasterIdentity) master.getIdentificationObject();
 	        
@@ -3362,6 +3600,15 @@ public class SerialHelper {
 	        }
 	        
 	        String cleanName = name.trim().replace(" ", "_").replace(":", "_");
+	        return cleanName.length() > maxLength ? cleanName.substring(0, maxLength) : cleanName;
+	    }
+	    
+	    private String adjustNameLength2(String name, int maxLength) {
+	        if (name == null || name.trim().isEmpty()) {
+	            return DEFAULT_NAME;
+	        }
+	        
+	        String cleanName = name.trim().replace("_", ":");
 	        return cleanName.length() > maxLength ? cleanName.substring(0, maxLength) : cleanName;
 	    }
 	    
